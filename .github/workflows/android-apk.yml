@@ -20,9 +20,10 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Preparar Android SDK
+            - name: Preparar Android SDK
         uses: android-actions/setup-android@v4
-with:
+        with:
+          packages: 'platform-tools'
   packages: 'platform-tools'
 
       - name: Instalar herramientas Android
