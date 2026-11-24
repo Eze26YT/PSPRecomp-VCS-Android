@@ -1,0 +1,82 @@
+name: VCS Android APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Preparar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar herramientas Android
+        run: |
+          sdkmanager "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;28.2.13676358" \
+            "cmake;3.22.1"
+
+      - name: Preparar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Incorporar HLE AV Module
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("profiles/vcs/host/vcs_profile.cpp")
+          if not p.exists():
+              raise SystemExit(f"No se encontró {p}")
+
+          s = p.read_text()
+          marker = '    runtime.register_hle("sceUtility", 0x50C4CD57u,'
+
+          if 'runtime.register_hle("sceUtility", 0xC629AF26u,' in s:
+              raise SystemExit("El HLE ya existe. Se cancela para evitar duplicados.")
+
+          if s.count(marker) != 1:
+              raise SystemExit("No se encontró un punto de inserción único.")
+
+          block = '''    // PSP AV module loading.
+              runtime.register_hle("sceUtility", 0xC629AF26u,
+                  [](psprecomp::Runtime &, psprecomp::AllegrexContext &ctx) {
+                      const std::int32_t module = static_cast<std::int32_t>(ctx.gpr[4]);
+                      if (module == 0 || module == 1) {
+                          set_success(ctx);
+                      } else {
+                          ctx.set_gpr(2, static_cast<std::uint32_t>(-1));
+                      }
+                  });
+
+          '''
+
+          p.write_text(s.replace(marker, block + marker, 1))
+          print("HLE incorporado correctamente.")
+          PY
+
+      - name: Compilar APK
+        run: gradle -p android :app:assembleDebug
+
+      - name: Publicar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: VCS-Android-APK
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
