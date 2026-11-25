@@ -144,7 +144,7 @@ final class GameImporter {
 
     private static String safeName(String name) {
         if (name == null) return "";
-        String safe = name.replace('/', '_').replace('\\\\', '_').trim();
+        String safe = name.replace('/', '_').replace('\\', '_').trim();
         if (safe.isEmpty() || safe.equals(".") || safe.equals("..")) return "";
         return safe;
     }
