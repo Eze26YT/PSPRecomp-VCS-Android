@@ -93,7 +93,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     private final Handler handler = new Handler();
     private final Runnable statusPoll = new Runnable() {
         @Override public void run() {
-            if (statusView != null) {
+            if (statusView != null && startRequested) {
                 String status = nativeStatus();
                 statusView.setText(status);
                 boolean running = status.startsWith("Juego en marcha.");
@@ -308,7 +308,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
 
                 runOnUiThread(() -> {
                     importingGame = false;
-                    folderPickerLaunched = true;
+                    folderPickerLaunched = false;
                     statusView.setText("¡Juego importado! Iniciando…");
                     maybeStartGame();
                 });
