@@ -247,6 +247,20 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         startRequested = true;
         gameStartAt = SystemClock.uptimeMillis();
         applyLowEndDefaultsOnce(); // before the native side reads the INI
+        File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        if (!downloads.isDirectory() && !downloads.mkdirs()) {
+            statusView.setText("No se pudo preparar Descargas para el registro.");
+            startRequested = false;
+            return;
+        }
+        String logPath = new File(downloads, "VCSNative.log").getAbsolutePath();
+        if (!writeConfigKeys("Diagnostics",
+                new String[]{"LogToFile", "LogFile", "FlushEveryLine"},
+                new String[]{"true", logPath, "true"})) {
+            statusView.setText("No se pudo activar el registro de diagnóstico.");
+            startRequested = false;
+            return;
+        }
         nativeStartGame(gameRoot.getAbsolutePath(), getFilesDir().getAbsolutePath());
     }
 
