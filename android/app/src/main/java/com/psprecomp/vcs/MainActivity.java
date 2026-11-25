@@ -10,6 +10,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.StatFs;
 import android.os.Handler;
 import android.os.SystemClock;
 import android.provider.Settings;
@@ -24,6 +25,7 @@ import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -36,6 +38,8 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity implements SurfaceHolder.Callback {
     static { System.loadLibrary("vcs_android"); }
@@ -71,7 +75,9 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     private SurfaceView surfaceView;
     private TouchControlsView controls;
     private TextView statusView;
-    private boolean surfaceReady, startRequested, permissionPrompted;
+    private static final int REQUEST_GAME_FOLDER = 4101;
+    private boolean surfaceReady, startRequested, folderPickerLaunched, importingGame;
+    private final ExecutorService importExecutor = Executors.newSingleThreadExecutor();
     private long gameStartAt;
     private int panelWidth, panelHeight;
 
@@ -224,30 +230,112 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     }
 
     private void maybeStartGame() {
-        if (startRequested || !surfaceReady) return;
-        if (Build.VERSION.SDK_INT >= 30 && !Environment.isExternalStorageManager()) {
-            if (!permissionPrompted) {
-                permissionPrompted = true;
-                statusView.setText("Permite acceso a archivos para leer el juego en Memoria interna/VCS.");
-                try {
-                    startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                        Uri.parse("package:" + getPackageName())));
-                } catch (Exception ignored) {
-                    startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
-                }
-            }
-            return;
-        }
-        File gameRoot = new File(Environment.getExternalStorageDirectory(), "VCS");
+        if (startRequested || importingGame || !surfaceReady) return;
+
+        File gameRoot = new File(getFilesDir(), "VCS");
         File elf = new File(gameRoot, "PSP_GAME/SYSDIR/EBOOT_DECRYPTED.ELF");
         if (!elf.isFile()) {
-            statusView.setText("No encuentro el juego en Memoria interna/VCS/PSP_GAME.");
+            if (!folderPickerLaunched) launchGameFolderPicker();
             return;
         }
+
+        File rundata = new File(gameRoot, "PSP_GAME/USRDIR/RUNDATA/PSP/MOVIES");
+        if (!new File(rundata, "LOGO.PMF").isFile() ||
+            !new File(rundata, "TITLES.PMF").isFile()) {
+            statusView.setText("La copia del juego está incompleta. Vuelve a seleccionar PSP_GAME.");
+            if (!folderPickerLaunched) launchGameFolderPicker();
+            return;
+        }
+
         startRequested = true;
         gameStartAt = SystemClock.uptimeMillis();
-        applyLowEndDefaultsOnce(); // before the native side reads the INI
+        applyLowEndDefaultsOnce();
         nativeStartGame(gameRoot.getAbsolutePath(), getFilesDir().getAbsolutePath());
+    }
+
+    private void launchGameFolderPicker() {
+        folderPickerLaunched = true;
+        statusView.setVisibility(View.VISIBLE);
+        statusView.setText("Selecciona la carpeta PSP_GAME de tu copia de GTA Vice City Stories.");
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(intent, REQUEST_GAME_FOLDER);
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQUEST_GAME_FOLDER) return;
+
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            folderPickerLaunched = false;
+            statusView.setText("No seleccionaste ninguna carpeta. Pulsa atrás y vuelve a intentarlo.");
+            return;
+        }
+
+        Uri treeUri = data.getData();
+        final int grantFlags = data.getFlags() &
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        try {
+            getContentResolver().takePersistableUriPermission(treeUri, grantFlags);
+        } catch (SecurityException ignored) {
+            // The copy is immediate; a persistent grant is not required afterward.
+        }
+
+        importingGame = true;
+        statusView.setVisibility(View.VISIBLE);
+        statusView.setText("Preparando la importación del juego…");
+        importExecutor.execute(() -> {
+            File gameRoot = new File(getFilesDir(), "VCS");
+            File destination = new File(gameRoot, "PSP_GAME");
+            try {
+                long available = new StatFs(getFilesDir().getAbsolutePath()).getAvailableBytes();
+                if (available < 2L * 1024 * 1024 * 1024) {
+                    throw new IOException("Necesitas al menos 2 GB libres en el almacenamiento interno para importar el juego.");
+                }
+
+                GameImporter.copyPspGame(getContentResolver(), treeUri, destination,
+                    relativePath -> runOnUiThread(() ->
+                        statusView.setText("Copiando juego…\n" + relativePath)));
+
+                File elf = new File(destination, "SYSDIR/EBOOT_DECRYPTED.ELF");
+                File movies = new File(destination, "USRDIR/RUNDATA/PSP/MOVIES");
+                if (!elf.isFile() ||
+                    !new File(movies, "LOGO.PMF").isFile() ||
+                    !new File(movies, "TITLES.PMF").isFile()) {
+                    throw new IOException("La carpeta seleccionada no contiene todos los archivos necesarios. Selecciona PSP_GAME, que contiene SYSDIR y USRDIR.");
+                }
+
+                runOnUiThread(() -> {
+                    importingGame = false;
+                    folderPickerLaunched = true;
+                    statusView.setText("¡Juego importado! Iniciando…");
+                    maybeStartGame();
+                });
+            } catch (Exception e) {
+                deleteRecursively(gameRoot);
+                runOnUiThread(() -> {
+                    importingGame = false;
+                    folderPickerLaunched = false;
+                    statusView.setText("No se pudo importar: " + e.getMessage());
+                    new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                        .setTitle("Error al importar el juego")
+                        .setMessage(e.getMessage() + "\n\nComprueba que seleccionaste PSP_GAME y que tienes espacio suficiente.")
+                        .setPositiveButton("Elegir carpeta", (dialog, which) -> launchGameFolderPicker())
+                        .setNegativeButton("Cerrar", null)
+                        .show();
+                });
+            }
+        });
+    }
+
+    private static void deleteRecursively(File file) {
+        if (file == null || !file.exists()) return;
+        File[] children = file.listFiles();
+        if (children != null) {
+            for (File child : children) deleteRecursively(child);
+        }
+        file.delete();
     }
 
     // --- Physical controllers --------------------------------------------------------------
@@ -837,6 +925,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     }
     @Override protected void onDestroy() {
         handler.removeCallbacks(statusPoll);
+        importExecutor.shutdownNow();
         nativeStopGame();
         super.onDestroy();
     }
