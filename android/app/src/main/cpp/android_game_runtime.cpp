@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -176,7 +177,8 @@ void run_game(std::filesystem::path root, std::filesystem::path app_data) {
         // this one) do not inherit the pinning and crowd the same cores.
         tune_game_thread();
         try {
-            runtime->run(elf.runtime_entry(), 4'000'000'000ull);
+            setenv("PSPRECOMP_TRACE_ON_ERROR", "1", 1);
+        runtime->run(elf.runtime_entry(), 4'000'000'000ull);
         } catch (...) {
             progress_monitor_stop.store(true, std::memory_order_release);
             if (progress_monitor.joinable()) progress_monitor.join();

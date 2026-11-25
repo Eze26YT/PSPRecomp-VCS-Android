@@ -995,6 +995,13 @@ void Runtime::run(std::uint32_t entry, std::uint64_t max_dispatches) {
                               << " a3=" << hex32(snapshot.a3)
                               << " sp=" << hex32(snapshot.sp)
                               << " ra=" << hex32(snapshot.ra) << "\n";
+#if defined(__ANDROID__)
+                    __android_log_print(ANDROID_LOG_ERROR, "VCSHle",
+                        "[recent] uid=%d name=%s pc=%08x a0=%08x a1=%08x a2=%08x a3=%08x sp=%08x ra=%08x",
+                        static_cast<int>(snapshot.thread_uid), snapshot.thread_name.data(),
+                        snapshot.pc, snapshot.a0, snapshot.a1, snapshot.a2, snapshot.a3,
+                        snapshot.sp, snapshot.ra);
+#endif
                 }
             }
             std::ostringstream message;
@@ -1085,6 +1092,13 @@ void Runtime::run(std::uint32_t entry, std::uint64_t max_dispatches) {
                           << " a3=" << hex32(snapshot.a3)
                           << " sp=" << hex32(snapshot.sp)
                           << " ra=" << hex32(snapshot.ra) << "\n";
+#if defined(__ANDROID__)
+                    __android_log_print(ANDROID_LOG_ERROR, "VCSHle",
+                        "[recent] uid=%d name=%s pc=%08x a0=%08x a1=%08x a2=%08x a3=%08x sp=%08x ra=%08x",
+                        static_cast<int>(snapshot.thread_uid), snapshot.thread_name.data(),
+                        snapshot.pc, snapshot.a0, snapshot.a1, snapshot.a2, snapshot.a3,
+                        snapshot.sp, snapshot.ra);
+#endif
             }
         }
         if (profile_dispatch) {
