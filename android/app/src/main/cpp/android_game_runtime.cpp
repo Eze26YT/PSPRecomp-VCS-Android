@@ -193,6 +193,7 @@ void run_game(std::filesystem::path root, std::filesystem::path app_data) {
             ? "El juego se detuvo." : "El juego se detuvo: " + runtime->stop_reason());
     } catch (const std::exception &error) {
         g_runtime.store(nullptr, std::memory_order_release);
+        vcs::runtime_log_error("fatal exception", error.what());
         vcs::display_window_shutdown();
         vcs::shutdown_ge_gpu_backend();
         vcs::audio_output_shutdown();
