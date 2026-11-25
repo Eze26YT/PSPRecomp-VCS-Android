@@ -159,11 +159,12 @@ void run_game(std::filesystem::path root, std::filesystem::path app_data) {
         vcs::install_starvation_preemption();
         g_runtime.store(runtime.get(), std::memory_order_release);
         if (g_stop_requested.load(std::memory_order_acquire)) runtime->request_stop();
-        std::jthread progress_monitor([](std::stop_token stop_token) {
+        std::atomic_bool progress_monitor_stop{};
+        std::thread progress_monitor([&progress_monitor_stop] {
             std::uint32_t previous_pc = 0u;
-            while (!stop_token.stop_requested()) {
+            while (!progress_monitor_stop.load(std::memory_order_acquire)) {
                 std::this_thread::sleep_for(std::chrono::seconds(5));
-                if (stop_token.stop_requested()) break;
+                if (progress_monitor_stop.load(std::memory_order_acquire)) break;
                 const std::uint32_t pc = psprecomp::runtime_dispatch_pc();
                 __android_log_print(ANDROID_LOG_INFO, kLogTag,
                     "boot progress guest_pc=%08x %s", pc,
@@ -174,8 +175,14 @@ void run_game(std::filesystem::path root, std::filesystem::path app_data) {
         // After the Vulkan device exists, so its driver threads (created from
         // this one) do not inherit the pinning and crowd the same cores.
         tune_game_thread();
-        runtime->run(elf.runtime_entry(), 4'000'000'000ull);
-        progress_monitor.request_stop();
+        try {
+            runtime->run(elf.runtime_entry(), 4'000'000'000ull);
+        } catch (...) {
+            progress_monitor_stop.store(true, std::memory_order_release);
+            if (progress_monitor.joinable()) progress_monitor.join();
+            throw;
+        }
+        progress_monitor_stop.store(true, std::memory_order_release);
         if (progress_monitor.joinable()) progress_monitor.join();
         g_runtime.store(nullptr, std::memory_order_release);
         vcs::display_window_shutdown();
