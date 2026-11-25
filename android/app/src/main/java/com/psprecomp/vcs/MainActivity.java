@@ -31,6 +31,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.text.DateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -89,6 +90,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         @Override public void run() {
             if (statusView != null) {
                 String status = nativeStatus();
+                exportDiagnosticLogIfAvailable(status);
                 statusView.setText(status);
                 boolean running = status.startsWith("Juego en marcha.");
                 statusView.setVisibility(running && SystemClock.uptimeMillis() - gameStartAt > 6000
@@ -253,7 +255,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
             startRequested = false;
             return;
         }
-        String logPath = new File(downloads, "VCSNative.log").getAbsolutePath();
+        String logPath = "VCSNative.log";
         if (!writeConfigKeys("Diagnostics",
                 new String[]{"LogToFile", "LogFile", "FlushEveryLine"},
                 new String[]{"true", logPath, "true"})) {
@@ -711,6 +713,20 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         startActivity(restart);
         // The renderer is configured once per process; a fresh one picks up the new size.
         Runtime.getRuntime().exit(0);
+    }
+
+    private void exportDiagnosticLogIfAvailable(String status) {
+        if (status == null || !(status.startsWith("No se pudo iniciar el juego:") ||
+                status.startsWith("El juego se detuvo"))) return;
+        File source = new File(getFilesDir(), "VCSNative.log");
+        if (!source.isFile() || source.length() == 0L) return;
+        File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        if (!downloads.isDirectory() && !downloads.mkdirs()) return;
+        File destination = new File(downloads, "VCSNative.log");
+        try {
+            Files.copy(source.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException ignored) {
+        }
     }
 
     private File configFile() {
