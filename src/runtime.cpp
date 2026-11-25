@@ -218,7 +218,7 @@ bool Runtime::invoke_chained_call(AllegrexContext &ctx, GuestMemory::AotFastView
 
     // Indirect jalr/vcall targets usually land in ordinary generated code too.
     // Prefer the tiny dense unit table. Units overlapped by a host/import
-    // replacement are poisoned and fall back to exact PC lookup. Ownership is
+    // replacement use exact PC lookup first. Ownership is
     // still guarded on every native chain frame because a nested descendant
     // can cross the scheduler boundary even when this immediate unit is clean.
     // dynamic JR/JALR chains used to canonicalize the same target
@@ -235,6 +235,8 @@ bool Runtime::invoke_chained_call(AllegrexContext &ctx, GuestMemory::AotFastView
                 ? (unit_delta >> 14u) : (unit_delta / generated_unit_span_);
             if (unit_index < kGeneratedUnitFastCapacity) {
                 function = generated_units_[unit_index];
+                if (generated_unit_disabled_[unit_index] != 0u)
+                    function = nullptr;
                 if (function != nullptr && shared_aot_mem != nullptr &&
                     generated_unit_disabled_[unit_index] == 0u)
                     entry_function = generated_unit_entries_[unit_index];
@@ -357,8 +359,7 @@ void Runtime::register_generated_unit(std::uint32_t unit_index,
         generated_unit_layout_valid_ = false;
         return;
     }
-    if (generated_unit_disabled_[unit_index] == 0u)
-        generated_units_[unit_index] = function;
+    generated_units_[unit_index] = function;
     generated_unit_entries_[unit_index] = entry_function;
 }
 
@@ -437,8 +438,8 @@ void Runtime::register_function(std::uint32_t address, RecompiledFunction functi
     // Import wrappers and HLE entries are deliberately excluded: chaining must
     // never run one inline, because they are where thread switches happen.
     // Assign unconditionally -- an import stub can also be covered by a unit,
-    // and a later import registration has to clear the earlier unit pointer or
-    // chaining would keep running the raw code instead of the wrapper.
+    // and a later import registration marks the unit as mixed so exact lookup
+    // takes priority over generated code at the replacement address.
     const auto &registered = functions_[address].name;
     const bool chainable = registered.starts_with("recomp_unit_");
     direct_chainable_[index] = chainable ? function : nullptr;
@@ -448,7 +449,6 @@ void Runtime::register_function(std::uint32_t address, RecompiledFunction functi
         const std::size_t unit_index = static_cast<std::size_t>(unit_delta / generated_unit_span_);
         if (unit_index < kGeneratedUnitFastCapacity) {
             generated_unit_disabled_[unit_index] = 1u;
-            generated_units_[unit_index] = nullptr;
         }
     }
 }
@@ -656,10 +656,22 @@ void Runtime::run(std::uint32_t entry, std::uint64_t max_dispatches) {
             // Most outer dispatches are ordinary AOT PCs.  Resolve those
             // through the tiny generated-unit table first; the old per-PC
             // table spans several MiB and an effectively random probe here can
-            // cost a cache/TLB miss at every outer return.  Any unit containing
-            // a host/import override is poisoned at registration and falls
-            // back to exact per-PC dispatch automatically.
-            RecompiledFunction function = lookup_generated_unit(before);
+            // cost a cache/TLB miss at every outer return. Mixed units check
+            // exact host/import overrides first and retain generated code for
+            // all other addresses in the same unit.
+            RecompiledFunction function = nullptr;
+            const std::uint32_t canonical_before = memory_.canonical(before);
+            if (generated_unit_layout_valid_ && generated_unit_span_ != 0u &&
+                canonical_before >= generated_unit_base_) {
+                const std::uint32_t unit_delta = canonical_before - generated_unit_base_;
+                const std::size_t unit_index = generated_unit_span_ == 16384u
+                    ? static_cast<std::size_t>(unit_delta >> 14u)
+                    : static_cast<std::size_t>(unit_delta / generated_unit_span_);
+                if (unit_index < kGeneratedUnitFastCapacity &&
+                    generated_unit_disabled_[unit_index] != 0u)
+                    function = lookup_function(before);
+            }
+            if (function == nullptr) function = lookup_generated_unit(before);
             if (function == nullptr) function = lookup_function(before);
             if (function == nullptr) {
                 stop("No recompiled function registered at " + hex32(before));

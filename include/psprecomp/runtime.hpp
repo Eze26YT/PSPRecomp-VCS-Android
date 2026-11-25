@@ -151,8 +151,8 @@ public:
     //
     // The one table equality check is intentional: if install_profile() later
     // overlays an import/HLE/host replacement in that bucket, registration
-    // poisons generated_units_[UnitIndex].  We then fall back to the old exact
-    // path and unwind to outer dispatch instead of bypassing the replacement.
+    // marks the unit as mixed. Exact overrides take priority while ordinary
+    // generated entries remain available through the exact chain table.
     template <auto Function, std::uint32_t UnitIndex, std::uint16_t DirectEntryId = 0u,
               std::uint32_t DirectTargetPc = 0u>
     [[nodiscard]] PSPRECOMP_RUNTIME_FORCEINLINE bool invoke_chained_direct(
@@ -168,7 +168,7 @@ public:
             return invoke_chained_unit(ctx, UnitIndex, shared_aot_mem);
         }
         if (generated_unit_disabled_[UnitIndex] != 0u) {
-            // A unit can be poisoned because it contains PSP import stubs while
+            // A unit can be mixed because it contains PSP import stubs while
             // other exact entries in the same 16 KiB bucket remain ordinary AOT.
             // codegen sends known import targets straight to outer
             // dispatch, so for the remaining fixed targets use the exact per-PC
@@ -273,10 +273,10 @@ private:
 
     static std::string hle_key(std::string_view library, std::uint32_t nid);
     [[nodiscard]] RecompiledFunction lookup_function(std::uint32_t address) const noexcept;
-    // Dense unit lookup for the production outer dispatcher.  Unlike
+    // Dense unit lookup for the production outer dispatcher. Unlike
     // lookup_function(), this touches a 512-entry table rather than the
     // multi-megabyte per-PC table when the PC belongs to a clean generated
-    // unit. Host/import-overlapped units are poisoned and return nullptr.
+    // unit. Mixed units check exact host/import overrides before using it.
     [[nodiscard]] RecompiledFunction lookup_generated_unit(std::uint32_t address) const noexcept;
     [[nodiscard]] const FunctionEntry *lookup_entry(std::uint32_t address) const noexcept;
     // Returns false only when the starvation/preemption hook changed the PSP
@@ -306,8 +306,8 @@ private:
     // Entry-form companion used by dynamic JR/JALR chains so they can share the
     // caller's AotFastView instead of rebuilding RAM pointers/limits each unit.
     std::array<RecompiledEntryFunction, kGeneratedUnitFastCapacity> generated_unit_entries_{};
-    // Consulted only while registering. An overlapping host/import entry poisons
-    // the whole unit for the fast path; calls then unwind to exact PC dispatch.
+    // Marks units containing host/import overrides. Dispatch checks this flag
+    // to prioritize exact overrides while preserving ordinary generated entries.
     std::array<std::uint8_t, kGeneratedUnitFastCapacity> generated_unit_disabled_{};
     std::uint32_t generated_unit_base_{};
     std::uint32_t generated_unit_span_{};
