@@ -320,7 +320,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         try {
             checkImportSpace();
             GameImporter.copyPspGame(getContentResolver(), treeUri, destination,
-                relativePath -> runOnUiThread(() -> statusView.setText("Copiando juego…\\n" + relativePath)));
+                relativePath -> runOnUiThread(() -> statusView.setText("Copiando juego…\n" + relativePath)));
             validateImportedGame(destination);
             finishImportSuccess();
         } catch (Exception e) {
@@ -337,7 +337,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         try {
             checkImportSpace();
             ZipGameImporter.importZip(getContentResolver(), zipUri, destination,
-                relativePath -> runOnUiThread(() -> statusView.setText("Extrayendo ZIP…\\n" + relativePath)));
+                relativePath -> runOnUiThread(() -> statusView.setText("Extrayendo ZIP…\n" + relativePath)));
             validateImportedGame(destination);
             finishImportSuccess();
         } catch (Exception e) {
@@ -377,7 +377,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
             statusView.setText("No se pudo importar: " + e.getMessage());
             new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle("Error al importar")
-                .setMessage(e.getMessage() + "\\n\\nComprueba el ZIP o carpeta y el espacio disponible.")
+                .setMessage(e.getMessage() + "\n\nComprueba el ZIP o carpeta y el espacio disponible.")
                 .setPositiveButton("Intentar otra vez", (dialog, which) -> launchGameFolderPicker())
                 .setNegativeButton("Cerrar", null)
                 .setOnDismissListener(d -> hideSystemBars())
