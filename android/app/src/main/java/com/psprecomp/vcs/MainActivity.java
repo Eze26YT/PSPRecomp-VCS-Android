@@ -282,10 +282,8 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         statusView.setText("Selecciona el ZIP con los datos de tu juego.");
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("application/zip");
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        // Some file providers label ZIPs as octet-stream; allow those too.
         intent.setType("*/*");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         startActivityForResult(intent, REQUEST_GAME_ZIP);
     }
 
