@@ -97,7 +97,7 @@ final class ZipGameImporter {
 
     private static String normalize(String path) throws IOException {
         if (path == null) return "";
-        String value = path.replace('\\\\', '/');
+        String value = path.replace('\\', '/');
         while (value.startsWith("./")) value = value.substring(2);
         if (value.startsWith("/") || value.matches("^[A-Za-z]:.*")) {
             throw new IOException("El ZIP contiene una ruta no válida.");
