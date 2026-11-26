@@ -76,6 +76,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     private TouchControlsView controls;
     private TextView statusView;
     private static final int REQUEST_GAME_FOLDER = 4101;
+    private static final int REQUEST_GAME_ZIP = 4102;
     private boolean surfaceReady, startRequested, folderPickerLaunched, importingGame;
     private final ExecutorService importExecutor = Executors.newSingleThreadExecutor();
     private long gameStartAt;
@@ -256,76 +257,133 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     private void launchGameFolderPicker() {
         folderPickerLaunched = true;
         statusView.setVisibility(View.VISIBLE);
-        statusView.setText("Selecciona la carpeta PSP_GAME de tu copia de GTA Vice City Stories.");
+        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Instalar datos del juego")
+            .setMessage("Necesitas importar los archivos de tu copia de GTA Vice City Stories.")
+            .setPositiveButton("Seleccionar carpeta", (dialog, which) -> openGameFolderPicker())
+            .setNeutralButton("Importar ZIP", (dialog, which) -> openGameZipPicker())
+            .setNegativeButton("Cancelar", (dialog, which) -> {
+                folderPickerLaunched = false;
+                statusView.setText("Importación cancelada. Vuelve a abrir la aplicación para instalar los datos.");
+            })
+            .setOnDismissListener(d -> hideSystemBars())
+            .show();
+    }
+
+    private void openGameFolderPicker() {
+        statusView.setText("Selecciona la carpeta PSP_GAME de tu copia.");
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
                         Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         startActivityForResult(intent, REQUEST_GAME_FOLDER);
     }
 
+    private void openGameZipPicker() {
+        statusView.setText("Selecciona el ZIP con los datos de tu juego.");
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/zip");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        // Some file providers label ZIPs as octet-stream; allow those too.
+        intent.setType("*/*");
+        startActivityForResult(intent, REQUEST_GAME_ZIP);
+    }
+
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQUEST_GAME_FOLDER) return;
+        if (requestCode != REQUEST_GAME_FOLDER && requestCode != REQUEST_GAME_ZIP) return;
 
         if (resultCode != RESULT_OK || data == null || data.getData() == null) {
             folderPickerLaunched = false;
-            statusView.setText("No seleccionaste ninguna carpeta. Pulsa atrás y vuelve a intentarlo.");
+            statusView.setText("No seleccionaste ningún archivo. Puedes volver a intentarlo.");
             return;
         }
 
-        Uri treeUri = data.getData();
-        final int grantFlags = data.getFlags() &
-            (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        try {
-            getContentResolver().takePersistableUriPermission(treeUri, grantFlags);
-        } catch (SecurityException ignored) {
-            // The copy is immediate; a persistent grant is not required afterward.
-        }
-
-        importingGame = true;
-        statusView.setVisibility(View.VISIBLE);
-        statusView.setText("Preparando la importación del juego…");
-        importExecutor.execute(() -> {
-            File gameRoot = new File(getFilesDir(), "VCS");
-            File destination = new File(gameRoot, "PSP_GAME");
+        Uri selectedUri = data.getData();
+        if (requestCode == REQUEST_GAME_FOLDER) {
+            final int grantFlags = data.getFlags() &
+                (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
             try {
-                long available = new StatFs(getFilesDir().getAbsolutePath()).getAvailableBytes();
-                if (available < 2L * 1024 * 1024 * 1024) {
-                    throw new IOException("Necesitas al menos 2 GB libres en el almacenamiento interno para importar el juego.");
-                }
-
-                GameImporter.copyPspGame(getContentResolver(), treeUri, destination,
-                    relativePath -> runOnUiThread(() ->
-                        statusView.setText("Copiando juego…\n" + relativePath)));
-
-                File elf = new File(destination, "SYSDIR/EBOOT_DECRYPTED.ELF");
-                File movies = new File(destination, "USRDIR/RUNDATA/PSP/MOVIES");
-                if (!elf.isFile() ||
-                    !new File(movies, "LOGO.PMF").isFile() ||
-                    !new File(movies, "TITLES.PMF").isFile()) {
-                    throw new IOException("La carpeta seleccionada no contiene todos los archivos necesarios. Selecciona PSP_GAME, que contiene SYSDIR y USRDIR.");
-                }
-
-                runOnUiThread(() -> {
-                    importingGame = false;
-                    folderPickerLaunched = false;
-                    statusView.setText("¡Juego importado! Iniciando…");
-                    maybeStartGame();
-                });
-            } catch (Exception e) {
-                deleteRecursively(gameRoot);
-                runOnUiThread(() -> {
-                    importingGame = false;
-                    folderPickerLaunched = false;
-                    statusView.setText("No se pudo importar: " + e.getMessage());
-                    new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-                        .setTitle("Error al importar el juego")
-                        .setMessage(e.getMessage() + "\n\nComprueba que seleccionaste PSP_GAME y que tienes espacio suficiente.")
-                        .setPositiveButton("Elegir carpeta", (dialog, which) -> launchGameFolderPicker())
-                        .setNegativeButton("Cerrar", null)
-                        .show();
-                });
+                getContentResolver().takePersistableUriPermission(selectedUri, grantFlags);
+            } catch (SecurityException ignored) {
+                // The copy is immediate; a persistent grant is not required afterward.
             }
+            importExecutor.execute(() -> importSelectedFolder(selectedUri));
+        } else {
+            importExecutor.execute(() -> importSelectedZip(selectedUri));
+        }
+    }
+
+    private void importSelectedFolder(Uri treeUri) {
+        importingGame = true;
+        runOnUiThread(() -> statusView.setText("Preparando la importación…"));
+        File gameRoot = new File(getFilesDir(), "VCS");
+        File destination = new File(gameRoot, "PSP_GAME");
+        try {
+            checkImportSpace();
+            GameImporter.copyPspGame(getContentResolver(), treeUri, destination,
+                relativePath -> runOnUiThread(() -> statusView.setText("Copiando juego…\\n" + relativePath)));
+            validateImportedGame(destination);
+            finishImportSuccess();
+        } catch (Exception e) {
+            deleteRecursively(gameRoot);
+            finishImportFailure(e);
+        }
+    }
+
+    private void importSelectedZip(Uri zipUri) {
+        importingGame = true;
+        runOnUiThread(() -> statusView.setText("Preparando ZIP…"));
+        File gameRoot = new File(getFilesDir(), "VCS");
+        File destination = new File(gameRoot, "PSP_GAME");
+        try {
+            checkImportSpace();
+            ZipGameImporter.importZip(getContentResolver(), zipUri, destination,
+                relativePath -> runOnUiThread(() -> statusView.setText("Extrayendo ZIP…\\n" + relativePath)));
+            validateImportedGame(destination);
+            finishImportSuccess();
+        } catch (Exception e) {
+            finishImportFailure(e);
+        }
+    }
+
+    private void checkImportSpace() throws IOException {
+        long available = new StatFs(getFilesDir().getAbsolutePath()).getAvailableBytes();
+        if (available < 2L * 1024 * 1024 * 1024) {
+            throw new IOException("Necesitas al menos 2 GB libres en el almacenamiento interno para importar el juego.");
+        }
+    }
+
+    private static void validateImportedGame(File destination) throws IOException {
+        File elf = new File(destination, "SYSDIR/EBOOT_DECRYPTED.ELF");
+        File movies = new File(destination, "USRDIR/RUNDATA/PSP/MOVIES");
+        if (!elf.isFile() || !new File(movies, "LOGO.PMF").isFile() ||
+            !new File(movies, "TITLES.PMF").isFile()) {
+            throw new IOException("No encontramos los archivos esenciales. Elige PSP_GAME o un ZIP que contenga PSP_GAME/SYSDIR y USRDIR.");
+        }
+    }
+
+    private void finishImportSuccess() {
+        runOnUiThread(() -> {
+            importingGame = false;
+            folderPickerLaunched = false;
+            statusView.setText("¡Datos importados! Iniciando juego…");
+            maybeStartGame();
+        });
+    }
+
+    private void finishImportFailure(Exception e) {
+        runOnUiThread(() -> {
+            importingGame = false;
+            folderPickerLaunched = false;
+            statusView.setText("No se pudo importar: " + e.getMessage());
+            new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Error al importar")
+                .setMessage(e.getMessage() + "\\n\\nComprueba el ZIP o carpeta y el espacio disponible.")
+                .setPositiveButton("Intentar otra vez", (dialog, which) -> launchGameFolderPicker())
+                .setNegativeButton("Cerrar", null)
+                .setOnDismissListener(d -> hideSystemBars())
+                .show();
         });
     }
 
